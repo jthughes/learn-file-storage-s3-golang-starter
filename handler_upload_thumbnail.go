@@ -1,10 +1,11 @@
 package main
 
 import (
-	"encoding/base64"
 	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"strings"
 
 	"github.com/bootdotdev/learn-file-storage-s3-golang-starter/internal/auth"
 	"github.com/google/uuid"
@@ -32,7 +33,6 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 
 	fmt.Println("uploading thumbnail for video", videoID, "by user", userID)
 
-	// TODO: implement the upload here
 	const maxMemory int64 = 10 << 20 // 10 MB
 	err = r.ParseMultipartForm(maxMemory)
 	if err != nil {
@@ -40,7 +40,7 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	file, fileHeader, err := r.FormFile("thumbnail")
+	srcFile, fileHeader, err := r.FormFile("thumbnail")
 	if err != nil {
 		respondWithError(w, http.StatusInternalServerError, "Couldn't read thumbnail", err)
 		return
@@ -48,12 +48,6 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 	mediaType := fileHeader.Header.Get("Content-Type")
 	if mediaType == "" {
 		respondWithError(w, http.StatusBadRequest, "Missing Content-Type for thumbnail", nil)
-		return
-	}
-
-	data, err := io.ReadAll(file)
-	if err != nil {
-		respondWithError(w, http.StatusInternalServerError, "Couldn't read data", err)
 		return
 	}
 
@@ -68,19 +62,29 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	// thumbnail := thumbnail{
-	// 	data:      data,
-	// 	mediaType: mediaType,
-	// }
-	dataString := base64.StdEncoding.EncodeToString(data)
-	// videoThumbnails[videoID] = thumbnail
+	fileExtention := strings.Split(mediaType, "/")
+	if len(fileExtention) != 2 && fileExtention[0] != "image" {
+		respondWithError(w, http.StatusBadRequest, "Image format not recognised", nil)
+		return
+	}
 
-	url := fmt.Sprintf("data:%s;base64,%s", mediaType, dataString)
+	fileLocation := fmt.Sprintf("assets/%s.%s", videoID, fileExtention[1])
+	dstFile, err := os.Create(fileLocation)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Cannot create new file", err)
+		return
+	}
+	_, err = io.Copy(dstFile, srcFile)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Cannot save new media", err)
+		return
+	}
+
+	url := fmt.Sprintf("http://localhost:%s/%s", cfg.port, fileLocation)
 	video.ThumbnailURL = &url
 
 	err = cfg.db.UpdateVideo(video)
 	if err != nil {
-		// delete(videoThumbnails, videoID)
 		respondWithError(w, http.StatusInternalServerError, "Couldn't update video", err)
 		return
 	}
