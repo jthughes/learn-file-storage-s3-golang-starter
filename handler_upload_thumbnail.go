@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
 	"os"
 	"strings"
@@ -45,9 +46,13 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 		respondWithError(w, http.StatusInternalServerError, "Couldn't read thumbnail", err)
 		return
 	}
-	mediaType := fileHeader.Header.Get("Content-Type")
-	if mediaType == "" {
-		respondWithError(w, http.StatusBadRequest, "Missing Content-Type for thumbnail", nil)
+	mediaType, _, err := mime.ParseMediaType(fileHeader.Header.Get("Content-Type"))
+	if err != nil {
+		respondWithError(w, http.StatusBadRequest, "Missing Content-Type for thumbnail", err)
+		return
+	}
+	if mediaType != "image/jpeg" && mediaType != "image/png" {
+		respondWithError(w, http.StatusBadRequest, "Unsupported file type", nil)
 		return
 	}
 
@@ -63,10 +68,6 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 	}
 
 	fileExtention := strings.Split(mediaType, "/")
-	if len(fileExtention) != 2 && fileExtention[0] != "image" {
-		respondWithError(w, http.StatusBadRequest, "Image format not recognised", nil)
-		return
-	}
 
 	fileLocation := fmt.Sprintf("assets/%s.%s", videoID, fileExtention[1])
 	dstFile, err := os.Create(fileLocation)
