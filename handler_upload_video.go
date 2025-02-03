@@ -1,20 +1,51 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"io"
 	"mime"
 	"net/http"
 	"os"
+	"os/exec"
 	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/bootdotdev/learn-file-storage-s3-golang-starter/internal/auth"
 	"github.com/google/uuid"
 )
+
+func getVideoAspectRatio(filepath string) (string, error) {
+	cmd := exec.Command("ffprobe", "-v", "error", "-print_format", "json", "-show_streams", filepath)
+	var stdout bytes.Buffer
+	cmd.Stdout = &stdout
+	err := cmd.Run()
+	if err != nil {
+		return "", fmt.Errorf("ffprobe error: %w", err)
+	}
+
+	var output struct {
+		Streams []struct {
+			Width  int `json:"width"`
+			Height int `json:"Height"`
+		} `json:"streams"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &output); err != nil {
+		return "", fmt.Errorf("could not parse ffprobe output: %w", err)
+	}
+	ratio := float64(output.Streams[0].Width) / float64(output.Streams[0].Height)
+	if ratio > 1.77 && ratio < 1.79 {
+		return "16:9", nil
+	} else if ratio > 0.56 && ratio < 0.57 {
+		return "9:16", nil
+	} else {
+		return "other", nil
+	}
+}
 
 func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request) {
 	// Set upload limit
@@ -54,6 +85,8 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	fmt.Println("uploading video", videoID, "by user", userID)
+
 	// Parse video
 	srcFile, fileHeader, err := r.FormFile("video")
 	if err != nil {
@@ -92,6 +125,19 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	// Get video aspect ratio
+	videoAspectRatio, err := getVideoAspectRatio(tmpFile.Name())
+	if err != nil {
+
+	}
+	prefixMap := map[string]string{
+		"16:9":  "landscape",
+		"9:16":  "portrait",
+		"other": "other",
+	}
+
+	prefix := prefixMap[videoAspectRatio]
+
 	// Upload file to S3 storage
 	bytes := make([]byte, 32)
 	_, err = rand.Read(bytes)
@@ -102,7 +148,7 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 
 	fileName := base64.RawURLEncoding.EncodeToString(bytes)
 	fileExtention := strings.Split(mediaType, "/")
-	fileNameWithExt := fmt.Sprintf("%s.%s", fileName, fileExtention[1])
+	fileNameWithExt := fmt.Sprintf("%s/%s.%s", prefix, fileName, fileExtention[1])
 
 	_, err = cfg.s3Client.PutObject(context.Background(), &s3.PutObjectInput{
 		Bucket:      &cfg.s3Bucket,
